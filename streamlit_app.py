@@ -1,92 +1,80 @@
 import streamlit as st
-import requests
 import os
-from dotenv import load_dotenv
+import json
+import requests
+from groq import Groq
 
-# ---------------- Load .env ----------------
-load_dotenv()
+st.set_page_config(page_title="Monday Business Intelligence Agent", layout="wide")
 
-# ---------------- Page Config ----------------
-st.set_page_config(
-    page_title="Monday Business Intelligence Agent",
-    layout="wide"
-)
+# Load environment variables
+MONDAY_API_KEY = os.getenv("MONDAY_API_KEY")
+WORK_BOARD_ID = os.getenv("WORK_BOARD_ID")
+DEAL_BOARD_ID = os.getenv("DEAL_BOARD_ID")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# ---------------- Styling ----------------
-st.markdown("""
-<style>
-html, body, [class*="css"] {
-    background-color: #ffffff;
-    color: #111111;
-    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
-}
-.main-title {
-    font-family: Georgia, "Times New Roman", serif;
-    font-size: 32px;
-    font-weight: 600;
-    border-bottom: 2px solid #000000;
-    padding-bottom: 12px;
-    margin-bottom: 10px;
-}
-.sub-text {
-    font-size: 14px;
-    color: #444444;
-    margin-bottom: 30px;
-}
-.section-title {
-    font-size: 18px;
-    font-weight: 600;
-    border-bottom: 1px solid #cccccc;
-    padding-bottom: 6px;
-    margin-top: 30px;
-    margin-bottom: 15px;
-}
-.answer-box {
-    background-color: #ffffff;
-    padding: 22px;
-    border: 1px solid #000000;
-    border-radius: 2px;
-    font-size: 15px;
-    line-height: 1.6;
-}
-button {
-    background-color: #000000 !important;
-    color: #ffffff !important;
-    border-radius: 0px !important;
-}
-input {
-    border-radius: 0px !important;
-}
-</style>
-""", unsafe_allow_html=True)
+if not MONDAY_API_KEY or not GROQ_API_KEY:
+    st.error("API keys not configured. Please add secrets in settings.")
+    st.stop()
 
-# ---------------- UI ----------------
-st.markdown('<div class="main-title">Monday Business Intelligence Agent</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-text">Executive-level financial and operational reporting across work orders and deal pipeline</div>', unsafe_allow_html=True)
+client = Groq(api_key=GROQ_API_KEY)
 
-st.markdown('<div class="section-title">Executive Query</div>', unsafe_allow_html=True)
+URL = "https://api.monday.com/v2"
+headers = {
+    "Authorization": MONDAY_API_KEY,
+    "Content-Type": "application/json"
+}
 
+def get_board_data(board_id):
+    query = f"""
+    {{
+      boards(ids: {board_id}) {{
+        name
+        items_page(limit: 100) {{
+          items {{
+            name
+            column_values {{
+              column {{
+                title
+              }}
+              text
+            }}
+          }}
+        }}
+      }}
+    }}
+    """
+    response = requests.post(URL, json={"query": query}, headers=headers)
+    return response.json()
+
+def get_all_data():
+    return {
+        "work_orders": get_board_data(WORK_BOARD_ID),
+        "deals": get_board_data(DEAL_BOARD_ID)
+    }
+
+st.title("Monday Business Intelligence Agent")
 question = st.text_input("Enter your business question")
 
 if st.button("Generate Insight"):
-    if question.strip() == "":
-        st.warning("Please enter a question.")
-    else:
-        with st.spinner("Processing data..."):
-            try:
-                response = requests.post(
-                    "http://127.0.0.1:8000/ask",
-                    json={"question": question}
-                )
+    with st.spinner("Processing..."):
+        data = get_all_data()
+        simplified_data = json.dumps(data)[:10000]
 
-                if response.status_code == 200:
-                    answer = response.json().get("answer", "No response received.")
+        prompt = f"""
+You are a Business Intelligence Assistant.
 
-                    st.markdown('<div class="section-title">Executive Summary</div>', unsafe_allow_html=True)
-                    st.markdown('<div class="answer-box">' + answer + '</div>', unsafe_allow_html=True)
+DATA:
+{simplified_data}
 
-                else:
-                    st.error("Backend service error.")
+QUESTION:
+{question}
 
-            except Exception:
-                st.error("Unable to connect to backend service.")
+Provide structured executive summary.
+"""
+
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        st.write(response.choices[0].message.content)

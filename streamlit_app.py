@@ -1,57 +1,16 @@
 import streamlit as st
-import os
-import json
 import requests
-from groq import Groq
+import os
+from dotenv import load_dotenv
+
+# ---------------- Load .env ----------------
+load_dotenv()
 
 # ---------------- Page Config ----------------
 st.set_page_config(
     page_title="Monday Business Intelligence Agent",
     layout="wide"
 )
-
-# ---------------- Load Secrets ----------------
-MONDAY_API_KEY = os.getenv("eyJhbGciOiJIUzI1NiJ9.eyJ0aWQiOjYyNTU4NDEwOCwiYWFpIjoxMSwidWlkIjoxMDAyODQwMjAsImlhZCI6IjIwMjYtMDItMjVUMDU6NDc6NTQuMDAwWiIsInBlciI6Im1lOndyaXRlIiwiYWN0aWQiOjMzOTYwMjA3LCJyZ24iOiJhcHNlMiJ9.UE5JUWWveCpaye7AtGRedTw_Rokk0RYHeH27YkVOIUw")
-WORK_BOARD_ID = os.getenv("5026839673")
-DEAL_BOARD_ID = os.getenv("5026839687")
-GROQ_API_KEY = os.getenv("REDACTED_GROQ_API_KEY")
-
-client = Groq(api_key=GROQ_API_KEY)
-
-URL = "https://api.monday.com/v2"
-headers = {
-    "Authorization": MONDAY_API_KEY,
-    "Content-Type": "application/json"
-}
-
-# ---------------- Fetch Data ----------------
-def get_board_data(board_id):
-    query = f"""
-    {{
-      boards(ids: {board_id}) {{
-        name
-        items_page(limit: 100) {{
-          items {{
-            name
-            column_values {{
-              column {{
-                title
-              }}
-              text
-            }}
-          }}
-        }}
-      }}
-    }}
-    """
-    response = requests.post(URL, json={"query": query}, headers=headers)
-    return response.json()
-
-def get_all_data():
-    return {
-        "work_orders": get_board_data(WORK_BOARD_ID),
-        "deals": get_board_data(DEAL_BOARD_ID)
-    }
 
 # ---------------- Styling ----------------
 st.markdown("""
@@ -115,31 +74,19 @@ if st.button("Generate Insight"):
     else:
         with st.spinner("Processing data..."):
             try:
-                data = get_all_data()
-                simplified_data = json.dumps(data)[:10000]
-
-                prompt = f"""
-You are a Business Intelligence Assistant for founders.
-
-DATA:
-{simplified_data}
-
-QUESTION:
-{question}
-
-Provide structured executive summary with totals and risk highlights.
-"""
-
-                response = client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.2
+                response = requests.post(
+                    "http://127.0.0.1:8000/ask",
+                    json={"question": question}
                 )
 
-                answer = response.choices[0].message.content
+                if response.status_code == 200:
+                    answer = response.json().get("answer", "No response received.")
 
-                st.markdown('<div class="section-title">Executive Summary</div>', unsafe_allow_html=True)
-                st.markdown('<div class="answer-box">' + answer + '</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="section-title">Executive Summary</div>', unsafe_allow_html=True)
+                    st.markdown('<div class="answer-box">' + answer + '</div>', unsafe_allow_html=True)
 
-            except Exception as e:
-                st.error("Error processing request.")
+                else:
+                    st.error("Backend service error.")
+
+            except Exception:
+                st.error("Unable to connect to backend service.")

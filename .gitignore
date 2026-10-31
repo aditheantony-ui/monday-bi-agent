@@ -5,4 +5,7 @@
 models/
 __pycache__/
 *.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
 monday-bi-agent-mirror/

@@ -1,1 +1,8 @@
 .env
+.env.*
+!.env.example
+*.db
+models/
+__pycache__/
+*.py[cod]
+monday-bi-agent-mirror/

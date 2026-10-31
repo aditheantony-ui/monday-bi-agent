@@ -1,0 +1,3 @@
+# Optional: TensorFlow currently has limited support for Python 3.14 on Windows.
+# Install this file only with a compatible Python interpreter.
+tensorflow>=2.18,<3

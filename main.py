@@ -1,82 +1,74 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
-from monday_api import get_all_data
-from groq import Groq
-import os
-from dotenv import load_dotenv
-import json
+from pathlib import Path
+from typing import Any
 
-load_dotenv()
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
 
-app = FastAPI()
+from bi_agent.agent import answer_question, langgraph_available
+from bi_agent.analytics import monday_metrics
+from bi_agent.config import get_settings
+from bi_agent.database import create_session_factory, save_prediction
+from bi_agent.ml import FEATURES, predict_xgboost
+from bi_agent.monday import MondayClient
 
-# Initialize Groq client safely
-groq_api_key = os.getenv("GROQ_API_KEY")
-
-if not groq_api_key:
-    raise ValueError("GROQ_API_KEY is missing in .env file")
-
-client = Groq(api_key=groq_api_key)
+app = FastAPI(title="Monday Business Intelligence Agent", version="2.0.0")
+settings = get_settings()
 
 
 class Question(BaseModel):
-    question: str
+    question: str = Field(min_length=1, max_length=4000)
+
+
+class PredictionRequest(BaseModel):
+    deal_value: float = Field(ge=0)
+    days_open: float = Field(ge=0)
+    activity_count: float = Field(ge=0)
+    client_fit_score: float = Field(ge=0, le=1)
 
 
 @app.get("/")
-def home():
-    return {"message": "Monday BI Agent Running 🚀"}
+def home() -> dict[str, str]:
+    return {"message": "Monday BI Agent Running", "version": app.version}
+
+
+@app.get("/health")
+def health() -> dict[str, Any]:
+    return {"status": "ok", "langgraph_available": langgraph_available()}
+
+
+@app.get("/analytics")
+def analytics() -> dict[str, Any]:
+    try:
+        data = MondayClient(settings).get_all_data()
+        return {"metrics": monday_metrics(data), "data": data}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Monday.com analytics unavailable") from exc
 
 
 @app.get("/test")
-def test_monday_connection():
-    return get_all_data()
+def test_monday_connection() -> dict[str, Any]:
+    return MondayClient(settings).get_all_data()
 
 
+@app.post("/agent/query")
 @app.post("/ask")
-def ask_question(q: Question):
+def ask_question(q: Question) -> dict[str, Any]:
     try:
-        # Fetch monday data
-        data = get_all_data()
+        result = answer_question(settings, q.question)
+        return {"answer": result["answer"], "provider": result["provider"]}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-        # 🔥 Reduce data size to avoid token overflow
-        simplified_data = json.dumps(data)
-        simplified_data = simplified_data[:10000]  # keep under limit
 
-        prompt = f"""
-You are a Business Intelligence Assistant for founders.
-
-Use the provided monday.com data to answer clearly and concisely.
-
-DATA (truncated):
-{simplified_data}
-
-FOUNDER QUESTION:
-{q.question}
-
-Instructions:
-- Calculate totals if relevant
-- Highlight receivables or financial risks
-- Mention sector-level insights if possible
-- Mention data quality issues if visible
-- Keep response structured and professional
-"""
-
-        # ✅ Updated Stable Groq Model
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.2
-        )
-
-        answer = response.choices[0].message.content
-
-        return {"answer": answer}
-
-    except Exception as e:
-        return {
-            "error": "Something went wrong while processing the request.",
-            "details": str(e)
-        }
+@app.post("/predictions")
+def predict(request: PredictionRequest) -> dict[str, Any]:
+    model_path = Path(settings.model_dir) / "xgboost_deal_outcome.joblib"
+    if not model_path.exists():
+        raise HTTPException(status_code=503, detail="Train the XGBoost model before requesting predictions")
+    features = request.model_dump()
+    result = predict_xgboost(model_path, features)
+    try:
+        save_prediction(create_session_factory(settings.database_url), result, features)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Prediction succeeded but persistence failed") from exc
+    return {"model": "xgboost-deal-outcome", "features": FEATURES, **result, "synthetic_training": True}

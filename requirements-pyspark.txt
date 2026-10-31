@@ -1,0 +1,3 @@
+# Optional: PySpark requires a supported Java runtime. PySpark 4 supports
+# newer Python runtimes; use Python 3.12 if your Spark deployment is older.
+pyspark>=4,<5
